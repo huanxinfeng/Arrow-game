@@ -1,0 +1,6 @@
+{
+  "name": "Arrow Clearer",
+  "description": "A strategic puzzle game where you remove lines by clearing their paths. Featuring procedural level generation and special power-ups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
