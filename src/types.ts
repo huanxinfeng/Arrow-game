@@ -8,6 +8,7 @@ export interface LineSegment {
   direction: Direction;
   isExiting?: boolean;
   exitTarget?: Point; // Where it flies to
+  color?: string; // Random color assigned per line
 }
 
 export interface GameState {
@@ -21,10 +22,18 @@ export interface GameState {
   activeItems: {
     hint?: string; // id of the hinted line
     removeMode: boolean;
+    eraserInstructions: boolean;
     guideLines: boolean;
   };
+  items: {
+    hint: number;
+    eraser: number;
+    guide: number;
+  };
+  guideActiveInLevel: boolean;
   clearedPoints: Point[];
   currentMask: Point[];
+  tutorialClicked: boolean;
 }
 
 export type ShapeType = 'heart' | 'square' | 'circle' | 'diamond' | 'random';

@@ -4,6 +4,19 @@ import { SHAPE_PATTERNS, parsePattern } from './patterns';
 
 const GRID_SIZE = 30;
 
+// Simple seeded random generator (Mulberry32)
+function seededRandom(a: number) {
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+}
+
+let rng = seededRandom(1);
+const random = () => rng();
+
 function getShapeMask(type: string): Point[] {
   const pattern = SHAPE_PATTERNS[type];
   if (pattern) {
@@ -37,25 +50,189 @@ function getShapeMask(type: string): Point[] {
   return points;
 }
 
-export function generateLevel(level: number): { lines: LineSegment[], gridSize: number, mask: Point[] } {
-  const patternKeys = Object.keys(SHAPE_PATTERNS);
-  const allShapes = [...patternKeys, 'heart'];
+const PALETTE = ['#20e15d', '#22d3ee', '#ff9500', '#2d7eff', '#9d35e7', '#f21c8d', '#ffc918'];
+
+function assignColorsToLines(lines: LineSegment[]) {
+  const N = lines.length;
+  // Make colors scale with the number of lines
+  let colorCount = 2;
+  if (N <= 4) colorCount = 2;
+  else if (N <= 8) colorCount = 3;
+  else if (N <= 15) colorCount = 4;
+  else if (N <= 25) colorCount = 5;
+  else if (N <= 35) colorCount = 6;
+  else colorCount = 7;
+
+  // Pick `colorCount` random distinct colors from the palette
+  const shuffledPalette = [...PALETTE].sort(() => random() - 0.5);
+  const selectedColors = shuffledPalette.slice(0, colorCount);
   
-  const shape = allShapes[(level - 1) % allShapes.length];
+  // To keep same colors clustered instead of scattered, sort lines by angle from center
+  lines.forEach(l => {
+     const pt = l.points[0];
+     const cx = pt.x - 15;
+     const cy = pt.y - 15;
+     (l as any)._angle = Math.atan2(cy, cx);
+  });
+  
+  const sortedLines = [...lines].sort((a, b) => (a as any)._angle - (b as any)._angle);
+  
+  sortedLines.forEach((line, i) => {
+    // Assign segments to color blocks
+    const colorIndex = Math.floor((i / sortedLines.length) * colorCount);
+    line.color = selectedColors[colorIndex];
+    delete (line as any)._angle;
+  });
+}
+
+export function generateLevel(level: number): { lines: LineSegment[], gridSize: number, mask: Point[] } {
+  // Hardcoded Tutorial Level 1
+  if (level === 1) {
+    const tutorialLines: LineSegment[] = [
+      {
+        id: 'tutorial-green',
+        points: [{ x: 12, y: 17 }, { x: 12, y: 16 }, { x: 12, y: 15 }, { x: 12, y: 14 }, { x: 12, y: 13 }],
+        direction: 'up',
+        color: '#20e15d'
+      },
+      {
+        id: 'tutorial-yellow',
+        points: [{ x: 14, y: 17 }, { x: 14, y: 16 }, { x: 14, y: 15 }, { x: 14, y: 14 }, { x: 14, y: 13 }],
+        direction: 'up',
+        color: '#ffc918'
+      },
+      {
+        id: 'tutorial-blue',
+        points: [{ x: 16, y: 17 }, { x: 16, y: 16 }, { x: 16, y: 15 }, { x: 16, y: 14 }, { x: 16, y: 13 }],
+        direction: 'up',
+        color: '#2d7eff'
+      }
+    ];
+    const tutorialMask: Point[] = [];
+    tutorialLines.forEach(l => tutorialMask.push(...l.points));
+    return { lines: tutorialLines, gridSize: GRID_SIZE, mask: tutorialMask };
+  }
+
+  // Hardcoded Level 2
+  if (level === 2) {
+    const level2Lines: LineSegment[] = [
+      {
+        id: 'l2-pink',
+        points: [{ x: 14, y: 17 }, { x: 14, y: 16 }, { x: 14, y: 15 }, { x: 14, y: 14 }],
+        direction: 'up',
+        color: '#f21c8d' // Pink
+      },
+      {
+        id: 'l2-green',
+        points: [{ x: 15, y: 17 }, { x: 15, y: 16 }, { x: 15, y: 15 }, { x: 15, y: 14 }],
+        direction: 'up',
+        color: '#20e15d' // Green
+      },
+      {
+        id: 'l2-cyan',
+        points: [
+          { x: 13, y: 17 }, { x: 13, y: 16 }, { x: 13, y: 15 }, { x: 13, y: 14 }, { x: 13, y: 13 },
+          { x: 14, y: 13 }, { x: 15, y: 13 }, { x: 16, y: 13 },
+          { x: 16, y: 14 }, { x: 16, y: 15 }, { x: 16, y: 16 }, { x: 16, y: 17 }
+        ],
+        direction: 'down',
+        color: '#22d3ee' // Cyan
+      }
+    ];
+    const level2Mask: Point[] = [];
+    level2Lines.forEach(l => level2Mask.push(...l.points));
+    return { lines: level2Lines, gridSize: GRID_SIZE, mask: level2Mask };
+  }
+
+  // Hardcoded Level 3
+  if (level === 3) {
+    const level3Lines: LineSegment[] = [
+      {
+        id: 'l3-blue',
+        points: [
+          { x: 17, y: 14 }, { x: 17, y: 15 }, { x: 17, y: 16 }, { x: 17, y: 17 },
+          { x: 16, y: 17 }, { x: 15, y: 17 }, { x: 14, y: 17 }, { x: 13, y: 17 },
+          { x: 13, y: 16 }, { x: 13, y: 15 }, { x: 13, y: 14 }, { x: 13, y: 13 },
+          { x: 14, y: 13 }, { x: 15, y: 13 }, { x: 16, y: 13 }, { x: 17, y: 13 }
+        ],
+        direction: 'right',
+        color: '#2d7eff' // Blue
+      },
+      {
+        id: 'l3-pink',
+        points: [
+          { x: 14, y: 14 }, { x: 14, y: 15 }, { x: 15, y: 15 }
+        ],
+        direction: 'right',
+        color: '#f21c8d' // Pink
+      },
+      {
+        id: 'l3-yellow',
+        points: [
+          { x: 15, y: 14 }, { x: 16, y: 14 }, { x: 16, y: 15 }, { x: 16, y: 16 }, { x: 15, y: 16 }, { x: 14, y: 16 }
+        ],
+        direction: 'left',
+        color: '#ffc918' // Yellow
+      }
+    ];
+    const level3Mask: Point[] = [];
+    level3Lines.forEach(l => level3Mask.push(...l.points));
+    return { lines: level3Lines, gridSize: GRID_SIZE, mask: level3Mask };
+  }
+
+  // Initialize RNG with level seed
+  rng = seededRandom(level + 12345); // offset to avoid too-obvious patterns
+
+  const patternKeys = Object.keys(SHAPE_PATTERNS).filter(k => k !== 'tutorial' && k !== 'level2' && k !== 'level3');
+  
+  let shape = '';
+  if (level === 2) shape = 'level2';
+  else if (level === 3) shape = 'level3';
+  else {
+    shape = patternKeys[(level - 4) % patternKeys.length];
+  }
+
+  // Fallback to first if shape empty
+  if (!shape) shape = patternKeys[0];
+
   const mask = getShapeMask(shape);
   const gridSize = GRID_SIZE;
 
-  const maxAttempts = 100; // Drastically reduced for performance
+  // Difficulty rhythm
+  let targetFree = 2;
+  let minLen = 5;
+  let maxLen = 15;
+  
+  if (level <= 3) {
+    targetFree = 4;
+    minLen = 5;
+    maxLen = 12;
+  } else {
+    // mostly medium, with occasional hard or very hard
+    const cycle = level % 4; // 0, 1, 2, 3
+    if (cycle === 1 || cycle === 2) {
+      // Medium
+      targetFree = 3; // Fewer arrows free initially
+      minLen = 10;
+      maxLen = 18;
+    } else if (cycle === 3) {
+      // Hard
+      targetFree = 2;
+      minLen = 15;
+      maxLen = 25;
+    } else {
+      // Very Hard
+      targetFree = 1; // Very few arrows free initially
+      minLen = 20;
+      maxLen = 40;
+    }
+  }
+
+  const maxAttempts = 150; // Increased for finding harder levels
   let bestCandidate: { lines: LineSegment[], freeCount: number } | null = null;
 
-  // Difficulty targets (Initial Removable Lines)
-  let targetFree = 999;
-  if (level >= 3 && level <= 5) targetFree = 6;
-  if (level >= 6 && level <= 9) targetFree = 4;
-  if (level >= 10) targetFree = 2;
-
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const candidateLines = carveMaskIntoPaths(mask);
+    const candidateLines = carveMaskIntoPaths(mask, minLen, maxLen);
     
     // assignDirectionsIfSolvable now returns { success, initialFreeCount }
     const result = assignDirectionsIfSolvable(candidateLines, gridSize);
@@ -64,6 +241,7 @@ export function generateLevel(level: number): { lines: LineSegment[], gridSize: 
 
       // If we hit our perfect target, return immediately
       if (freeCount <= targetFree) {
+        assignColorsToLines(candidateLines);
         return { lines: candidateLines, gridSize, mask };
       }
 
@@ -74,18 +252,20 @@ export function generateLevel(level: number): { lines: LineSegment[], gridSize: 
     }
   }
 
-  // If we didn't find the perfect target within 100 tries, use the best one we did find
+  // If we didn't find the perfect target within X tries, use the best one we did find
   if (bestCandidate) {
+    assignColorsToLines(bestCandidate.lines);
     return { lines: bestCandidate.lines, gridSize, mask };
   }
 
-  // Ultimate fallback
-  const fallbackLines = carveMaskIntoPaths(mask);
+  // Ultimate fallback (should be very rare)
+  const fallbackLines = carveMaskIntoPaths(mask, minLen, maxLen);
   assignDirectionsIfSolvable(fallbackLines, gridSize, true);
+  assignColorsToLines(fallbackLines);
   return { lines: fallbackLines, gridSize, mask };
 }
 
-function carveMaskIntoPaths(mask: Point[]): LineSegment[] {
+function carveMaskIntoPaths(mask: Point[], minLen: number, maxLen: number): LineSegment[] {
   let lines: LineSegment[] = [];
   const remaining = new Set(mask.map(p => `${p.x},${p.y}`));
   let idCounter = 0;
@@ -117,7 +297,7 @@ function carveMaskIntoPaths(mask: Point[]): LineSegment[] {
     }
 
     if (candidates.length > 0) {
-      headCandidate = candidates[Math.floor(Math.random() * candidates.length)];
+      headCandidate = candidates[Math.floor(random() * candidates.length)];
     }
 
     // No neighbor-heads found, but points remain? They are isolated islands.
@@ -153,8 +333,8 @@ function carveMaskIntoPaths(mask: Point[]): LineSegment[] {
 
     remaining.delete(`${headCandidate.x},${headCandidate.y}`);
     const currentPoints: Point[] = [headCandidate];
-    // Minimum length 2, target up to 20
-    const targetLen = Math.floor(Math.random() * 15) + 5; 
+    // Length based on difficulty rhythm
+    const targetLen = Math.floor(random() * (maxLen - minLen + 1)) + minLen; 
 
     for (let i = 0; i < targetLen - 1; i++) {
         const last = currentPoints[currentPoints.length - 1];
@@ -168,13 +348,13 @@ function carveMaskIntoPaths(mask: Point[]): LineSegment[] {
             const dy = last.y - prev.y;
             const straightNeighbor = neighbors.find(n => n.x === last.x + dx && n.y === last.y + dy);
             
-            if (straightNeighbor && Math.random() < 0.95) {
+            if (straightNeighbor && random() < 0.95) {
                 next = straightNeighbor;
             } else {
-                next = neighbors[Math.floor(Math.random() * neighbors.length)];
+                next = neighbors[Math.floor(random() * neighbors.length)];
             }
         } else {
-            next = neighbors[Math.floor(Math.random() * neighbors.length)];
+            next = neighbors[Math.floor(random() * neighbors.length)];
         }
 
         currentPoints.push(next);
@@ -245,8 +425,8 @@ function carveMaskIntoPaths(mask: Point[]): LineSegment[] {
               }
             }
 
-            // Also merge if one is short (< 4 segments) to reduce clutter even if it turns
-            if (ptsA.length < 4 || ptsB.length < 4) {
+            // Also merge if one is short (< 6 segments) to reduce clutter even if it turns
+            if (ptsA.length < 6 || ptsB.length < 6) {
                a.points = [...ptsA, ...ptsB];
                return true;
             }
@@ -270,7 +450,7 @@ function carveMaskIntoPaths(mask: Point[]): LineSegment[] {
 
 function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forceAssignRemaining = false): { success: boolean, initialFreeCount: number } {
   const remainingIds = new Set<string>();
-  const pathToPoints = new Map<string, Set<string>>();
+  const globalPoints = new Map<string, string>();
   let removablesThisStep: string[] = [];
   let initialFreeCount = 0;
   let isFirstStep = true;
@@ -278,7 +458,9 @@ function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forc
   for (const l of lines) {
     if (l.points.length < 2) continue; 
     remainingIds.add(l.id);
-    pathToPoints.set(l.id, new Set(l.points.map(p => `${p.x},${p.y}`)));
+    for (const p of l.points) {
+      globalPoints.set(`${p.x},${p.y}`, l.id);
+    }
   }
   
   const getDir = (head: Point, prev: Point): Direction => {
@@ -299,8 +481,10 @@ function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forc
     }
   };
 
+  const linesMap = new Map(lines.map(l => [l.id, l]));
+
   const canExit = (lineId: string, endType: 'start' | 'end'): boolean => {
-    const l = lines.find(x => x.id === lineId)!;
+    const l = linesMap.get(lineId)!;
     const pts = l.points;
     const head = endType === 'end' ? pts[pts.length - 1] : pts[0];
     const prev = endType === 'end' ? pts[pts.length - 2] : pts[1];
@@ -310,11 +494,9 @@ function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forc
     
     let curr = { x: head.x + vec.x, y: head.y + vec.y };
     while (curr.x >= 0 && curr.x < gridSize && curr.y >= 0 && curr.y < gridSize) {
-      for (const otherId of remainingIds) {
-        if (otherId === lineId) continue;
-        if (pathToPoints.get(otherId)?.has(`${curr.x},${curr.y}`)) {
-          return false;
-        }
+      const pStr = `${curr.x},${curr.y}`;
+      if (globalPoints.has(pStr)) {
+        return false;
       }
       curr.x += vec.x;
       curr.y += vec.y;
@@ -325,11 +507,11 @@ function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forc
   while (remainingIds.size > 0) {
     removablesThisStep = [];
     
-    for (const lineId of Array.from(remainingIds)) {
+    for (const lineId of remainingIds) {
       if (canExit(lineId, 'end')) {
         removablesThisStep.push(lineId);
       } else if (canExit(lineId, 'start')) {
-        const l = lines.find(x => x.id === lineId)!;
+        const l = linesMap.get(lineId)!;
         l.points.reverse(); 
         removablesThisStep.push(lineId);
       }
@@ -338,7 +520,7 @@ function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forc
     if (removablesThisStep.length === 0) {
       if (forceAssignRemaining) {
         for (const id of remainingIds) {
-          const l = lines.find(x => x.id === id)!;
+          const l = linesMap.get(id)!;
           l.direction = getDir(l.points[l.points.length-1], l.points[l.points.length-2]);
         }
       }
@@ -351,9 +533,12 @@ function assignDirectionsIfSolvable(lines: LineSegment[], gridSize: number, forc
     }
 
     for (const id of removablesThisStep) {
-      const l = lines.find(x => x.id === id)!;
+      const l = linesMap.get(id)!;
       l.direction = getDir(l.points[l.points.length-1], l.points[l.points.length-2]);
       remainingIds.delete(id);
+      for (const p of l.points) {
+        globalPoints.delete(`${p.x},${p.y}`);
+      }
     }
   }
   
