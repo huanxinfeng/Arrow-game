@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user-specific game progress and stats.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth unique ID" },
+        "level": { "type": "integer", "description": "Current level reached" },
+        "items": {
+          "type": "object",
+          "properties": {
+            "hint": { "type": "integer" },
+            "eraser": { "type": "integer" },
+            "guide": { "type": "integer" }
+          }
+        },
+        "settings": {
+          "type": "object",
+          "properties": {
+            "music": { "type": "boolean" },
+            "sound": { "type": "boolean" },
+            "vibration": { "type": "boolean" }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "level", "items", "settings", "updatedAt"]
+    },
+    "LevelLog": {
+      "title": "Level Event Log",
+      "description": "Records attempts and completions of levels for analytics.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "level": { "type": "integer" },
+        "action": { "type": "string", "enum": ["start", "win", "fail", "restart"] },
+        "heartsRemaining": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "level", "action", "timestamp"]
+    },
+    "ItemUsageLog": {
+      "title": "Item Usage Log",
+      "description": "Tracks when and where items are consumed.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "level": { "type": "integer" },
+        "itemType": { "type": "string", "enum": ["hint", "eraser", "guide"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "level", "itemType", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles indexed by UID."
+    },
+    "/users/{userId}/level_logs/{logId}": {
+      "schema": "LevelLog",
+      "description": "Per-user logs of level activity."
+    },
+    "/users/{userId}/item_usage_logs/{logId}": {
+      "schema": "ItemUsageLog",
+      "description": "Per-user logs of item consumption."
+    }
+  }
+}

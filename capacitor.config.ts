@@ -1,8 +1,8 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.match3.game',
-  appName: 'Match 3 Game',
+  appId: 'com.arrowflow.game',
+  appName: 'Arrow Flow',
   webDir: 'dist',
   bundledWebRuntime: false
 };

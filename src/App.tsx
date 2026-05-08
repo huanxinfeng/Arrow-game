@@ -38,12 +38,23 @@ import starIcon from './icons/star.png';
 import adIcon from './icons/ad.png';
 import fingerIcon from './icons/finger.png';
 
+import { 
+  auth, 
+  loginWithGoogle, 
+  logout, 
+  saveUserData, 
+  getUserData, 
+  logEvent,
+  logAnalyticsEvent
+} from './services/firebaseService';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+
 const INITIAL_HEARTS = 3;
 const EXIT_DURATION = 0.35;
 const EXIT_DISTANCE = 30;
 
 const getInitialGameState = (): GameState => {
-  const saved = localStorage.getItem('match3_gameState');
+  const saved = localStorage.getItem('arrow_flow_gameState');
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
@@ -100,15 +111,15 @@ const getInitialGameState = (): GameState => {
 };
 
 const getInitialSettings = () => {
-  const saved = localStorage.getItem('match3_settings');
+  const saved = localStorage.getItem('arrow_flow_settings');
   if (saved) {
     try {
-      return { music: true, sound: true, vibration: true, ...JSON.parse(saved) };
+      return { music: true, sound: true, vibration: true, isAdsRemoved: false, ...JSON.parse(saved) };
     } catch (e) {
       console.warn("Failed to parse saved settings, using defaults.", e);
     }
   }
-  return { music: true, sound: true, vibration: true };
+  return { music: true, sound: true, vibration: true, isAdsRemoved: false };
 };
 
 export default function App() {
@@ -123,22 +134,57 @@ export default function App() {
   const [isRemoveAdsOpen, setIsRemoveAdsOpen] = useState(false);
   const [settings, setSettings] = useState(getInitialSettings);
   const [failedLines, setFailedLines] = useState<Set<string>>(new Set());
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [bouncingLine, setBouncingLine] = useState<{id: string, count: number, distance: number, duration?: number}>({id: '', count: 0, distance: 0});
   const [resetKey, setResetKey] = useState(0);
   const [centerOffset, setCenterOffset] = useState({ x: 0, y: 0 });
   const [clickEffects, setClickEffects] = useState<{ id: number; x: number; y: number }[]>([]);
 
+  const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
+
   useEffect(() => {
-    localStorage.setItem('match3_gameState', JSON.stringify({
+    logAnalyticsEvent('app_start');
+    const unsubscribe = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        setIsSyncing(true);
+        const cloudData = await getUserData(u.uid);
+        if (cloudData) {
+          setGameState(prev => ({
+            ...prev,
+            level: cloudData.level || prev.level,
+            items: cloudData.items || prev.items,
+            tutorialClicked: cloudData.tutorialClicked || prev.tutorialClicked,
+          }));
+          if (cloudData.settings) {
+            setSettings(prev => ({ ...prev, ...cloudData.settings }));
+          }
+        }
+        setIsSyncing(false);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const data = {
       level: gameState.level,
       items: gameState.items,
       tutorialClicked: gameState.tutorialClicked
-    }));
-  }, [gameState.level, gameState.items, gameState.tutorialClicked]);
+    };
+    localStorage.setItem('arrow_flow_gameState', JSON.stringify(data));
+    if (user && !isSyncing) {
+      saveUserData(user.uid, data);
+    }
+  }, [gameState.level, gameState.items, gameState.tutorialClicked, user, isSyncing]);
 
   useEffect(() => {
-    localStorage.setItem('match3_settings', JSON.stringify(settings));
-  }, [settings]);
+    localStorage.setItem('arrow_flow_settings', JSON.stringify(settings));
+    if (user && !isSyncing) {
+      saveUserData(user.uid, { settings });
+    }
+  }, [settings, user, isSyncing]);
 
   // Requirement: Pure centering on mask content
   useEffect(() => {
@@ -206,6 +252,9 @@ export default function App() {
         gridSize: levelData.gridSize,
         currentMask: levelData.mask 
     }));
+    if (user) {
+      logEvent(user.uid, 'level_logs', { level: gameState.level, action: 'start' });
+    }
   }, [gameState.level]);
 
   // Intro zoom sequence when level is mounted or restarted
@@ -307,6 +356,10 @@ export default function App() {
     if (gameState.victory || isTransitioning.current) return;
     isTransitioning.current = true;
     
+    if (user) {
+      logEvent(user.uid, 'level_logs', { level: gameState.level, action: 'win', heartsRemaining: gameState.hearts });
+    }
+    logAnalyticsEvent('level_win', { level: gameState.level, hearts_left: gameState.hearts });
     // Safety timeout to ensure transition lock is eventually cleared
     const safetyTimeout = setTimeout(() => {
       isTransitioning.current = false;
@@ -401,6 +454,9 @@ export default function App() {
   }, [gameState.gridSize, nextLevel]);
 
   const restartLevel = useCallback(() => {
+    if (user) {
+      logEvent(user.uid, 'level_logs', { level: gameState.level, action: 'restart' });
+    }
     setGameState(prev => {
       const levelData = generateLevel(prev.level);
       return { 
@@ -432,6 +488,10 @@ export default function App() {
   const handleLineClick = (lineId: string, customGridPos?: { x: number, y: number }) => {
     if (totalDrag.current > 10) return;
     if (gameState.gameOver || gameState.victory || isTransitioning.current) return;
+
+    if (gameState.activeItems.hint) {
+      setGameState(prev => ({ ...prev, activeItems: { ...prev.activeItems, hint: undefined } }));
+    }
 
     let targetLineId = lineId;
 
@@ -469,13 +529,22 @@ export default function App() {
 
     // Item: Remove Mode
     if (gameState.activeItems.removeMode) {
-      removeLine(targetLineId);
-      setGameState(prev => ({ ...prev, activeItems: { ...prev.activeItems, removeMode: false } }));
+      setGameState(prev => ({ 
+        ...prev, 
+        items: { ...prev.items, eraser: Math.max(0, prev.items.eraser - 1) },
+        activeItems: { ...prev.activeItems, removeMode: false } 
+      }));
+      if (user) {
+        logEvent(user.uid, 'item_usage_logs', { level: gameState.level, itemType: 'eraser' });
+      }
+      logAnalyticsEvent('item_use', { level: gameState.level, item: 'eraser' });
+      moveLineOut(targetLineId);
       return;
     }
 
     // Normal Click: Check Blocked
     const blockDistance = getBlockingDistance(line, gameState.lines, gameState.gridSize);
+    
     if (blockDistance !== -1) {
       const bounceOffsetCells = Math.max(0.4, blockDistance - 1);
       const calculatedDuration = (bounceOffsetCells * 2) / (EXIT_DISTANCE / EXIT_DURATION);
@@ -488,7 +557,14 @@ export default function App() {
         setFailedLines(prev => new Set(prev).add(targetLineId));
         setGameState(prev => {
           const newHearts = prev.hearts - 1;
-          return { ...prev, hearts: Math.max(0, newHearts), gameOver: newHearts <= 0 };
+          const isOver = newHearts <= 0;
+          if (isOver && user) {
+            logEvent(user.uid, 'level_logs', { level: prev.level, action: 'fail' });
+          }
+          if (isOver) {
+            logAnalyticsEvent('level_fail', { level: prev.level });
+          }
+          return { ...prev, hearts: Math.max(0, newHearts), gameOver: isOver };
         });
       }
 
@@ -547,21 +623,6 @@ export default function App() {
     }, EXIT_DURATION * 1000);
   };
 
-  const removeLine = (lineId: string) => {
-    setGameState(prev => {
-      const lineToRemove = prev.lines.find(l => l.id === lineId);
-      const remainingLines = prev.lines.filter(l => l.id !== lineId);
-      const newClearedPoints = lineToRemove ? [...prev.clearedPoints, ...lineToRemove.points] : prev.clearedPoints;
-
-      return { 
-        ...prev, 
-        items: { ...prev.items, eraser: prev.items.eraser - 1 },
-        lines: remainingLines,
-        clearedPoints: newClearedPoints
-      };
-    });
-  };
-
   const useHint = () => {
     if (gameState.items.hint <= 0) {
       // Logic to trigger "Watch Ad" could go here, or just increment for the demo
@@ -572,6 +633,10 @@ export default function App() {
     
     if (solvableLines.length > 0) {
       const solvable = solvableLines[Math.floor(Math.random() * solvableLines.length)];
+      if (user) {
+        logEvent(user.uid, 'item_usage_logs', { level: gameState.level, itemType: 'hint' });
+      }
+      logAnalyticsEvent('item_use', { level: gameState.level, item: 'hint' });
       // 1. Deduct item
       setGameState(prev => ({
         ...prev,
@@ -616,13 +681,7 @@ export default function App() {
         }
       }
 
-      // 3. Clear hint after delay
-      setTimeout(() => {
-        setGameState(prev => ({ 
-          ...prev, 
-          activeItems: { ...prev.activeItems, hint: undefined } 
-        }));
-      }, 2000);
+      // 3. (REMOVED) Clear hint after delay - Now handled in handleArrowClick
     }
   };
 
@@ -637,7 +696,7 @@ export default function App() {
 
     if (gameState.items.eraser <= 0) return;
 
-    // Enter remove mode immediately
+    // Enter remove mode WITHOUT consuming item (consumption happens on successful click)
     setGameState(prev => ({
       ...prev,
       activeItems: { ...prev.activeItems, removeMode: true, eraserInstructions: false }
@@ -664,6 +723,11 @@ export default function App() {
       // Not paid, check items
       if (prev.items.guide <= 0) return prev;
 
+      if (user) {
+        logEvent(user.uid, 'item_usage_logs', { level: prev.level, itemType: 'guide' });
+      }
+      logAnalyticsEvent('item_use', { level: prev.level, item: 'guide' });
+
       return {
         ...prev,
         items: { ...prev.items, guide: prev.items.guide - 1 },
@@ -676,6 +740,11 @@ export default function App() {
   const handleAreaClick = (e: React.MouseEvent) => {
     if (totalDrag.current > 10) return;
     
+    // REQUIREMENT: Clicking background cancels Eraser mode
+    if (gameState.activeItems.removeMode) {
+      setGameState(prev => ({ ...prev, activeItems: { ...prev.activeItems, removeMode: false } }));
+    }
+
     // Check if click is on top HUD area (exclude top 100px)
     if (e.clientY < 100) return;
 
@@ -994,7 +1063,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Pause">
+      <Modal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} title="Pause" height={345}>
         <div className="p-6 text-[#2A2F56]">
           <div className="flex items-start justify-between w-full h-[60px] m-0 p-0 mx-auto">
                  <SquareToggle 
@@ -1020,23 +1089,33 @@ export default function App() {
                  />
               </div>
 
+              {!settings.isAdsRemoved && (
+                <button 
+                    onClick={() => { setIsRemoveAdsOpen(true); setIsSettingsOpen(false); }}
+                    className="w-full bg-[#FF2398] text-white font-bold text-lg h-[48px] mt-[32px] mb-[20px] rounded-xl relative flex items-center pl-[16px] transition-all duration-75 shadow-[0_4px_0_#C6066F,0_7px_0_rgba(0,0,0,0.25)] active:translate-y-[4px] active:shadow-[0_0px_0_#C6066F,0_1px_0_rgba(0,0,0,0.25)]"
+                >
+                    <img src={removeAdIcon} className="w-[30px] h-[30px] object-contain shrink-0" alt="remove-ads" referrerPolicy="no-referrer" />
+                    <span className="flex-1 text-center">Remove Ads</span>
+                </button>
+              )}
               <button 
-                  onClick={() => { setIsRemoveAdsOpen(true); setIsSettingsOpen(false); }}
-                  className="w-full bg-[#FF2398] text-white font-bold text-lg h-[48px] mt-[32px] mb-[20px] rounded-xl relative flex items-center pl-[16px] transition-all duration-75 shadow-[0_4px_0_#C6066F,0_7px_0_rgba(0,0,0,0.25)] active:translate-y-[4px] active:shadow-[0_0px_0_#C6066F,0_1px_0_rgba(0,0,0,0.25)]"
-              >
-                  <img src={removeAdIcon} className="w-[30px] h-[30px] object-contain shrink-0" alt="remove-ads" referrerPolicy="no-referrer" />
-                  <span className="flex-1 text-center">Remove Ads</span>
-              </button>
-              <button 
-                  className="w-full bg-[#2982FF] text-white font-bold text-xl h-[48px] rounded-xl flex justify-center items-center transition-all duration-75 shadow-[0_4px_0_#0F61DA,0_7px_0_rgba(0,0,0,0.25)] active:translate-y-[4px] active:shadow-[0_0px_0_#0F61DA,0_1px_0_rgba(0,0,0,0.25)]"
+                  className={`w-full bg-[#2982FF] text-white font-bold text-xl h-[48px] rounded-xl flex justify-center items-center transition-all duration-75 shadow-[0_4px_0_#0F61DA,0_7px_0_rgba(0,0,0,0.25)] active:translate-y-[4px] active:shadow-[0_0px_0_#0F61DA,0_1px_0_rgba(0,0,0,0.25)] ${settings.isAdsRemoved ? 'mt-[32px]' : ''}`}
                   onClick={() => setIsSettingsOpen(false)}
               >
                   Continue
               </button>
               
               <div className="mt-[24px] flex flex-col items-center gap-3 text-sm font-bold">
-             <button className="text-[#65A9F7] underline hover:text-sky-300">Privacy Policy</button>
-             <button className="text-[#65A9F7] underline hover:text-sky-300">Restore purchases</button>
+              <div className="flex justify-center mt-1">
+                <a 
+                  href="https://acoustic-daphne-732.notion.site/Arrow-Flow-35a8175a305b80f6b596c56220b5a921?source=copy_link"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#65A9F7] text-sm underline hover:text-sky-300"
+                >
+                  Privacy Policy
+                </a>
+              </div>
           </div>
         </div>
       </Modal>
@@ -1054,7 +1133,11 @@ export default function App() {
             </div>
           </div>
           <button 
-              onClick={() => { setIsRemoveAdsOpen(false); setIsSettingsOpen(true); }}
+              onClick={() => { 
+                setSettings(s => ({ ...s, isAdsRemoved: true }));
+                setIsRemoveAdsOpen(false); 
+                setIsSettingsOpen(true); 
+              }}
               className="mt-[8px] w-[168px] bg-[#5cc62e] text-white font-bold text-2xl h-[48px] shrink-0 rounded-xl flex justify-center items-center transition-all duration-75 shadow-[0_4px_0_#419b1b,0_7px_0_rgba(0,0,0,0.25)] active:translate-y-[4px] active:shadow-[0_0px_0_#419b1b,0_1px_0_rgba(0,0,0,0.25)]"
           >
               $ 4.99
@@ -1088,6 +1171,54 @@ export default function App() {
           </button>
         </div>
       </Modal>
+
+      {/* --- Privacy Policy Modal --- */}
+      <AnimatePresence>
+        {isPrivacyOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-md"
+            onClick={() => setIsPrivacyOpen(false)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-[#252836] w-full max-w-md max-h-[80vh] rounded-[32px] p-8 flex flex-col overflow-hidden relative"
+              onClick={e => e.stopPropagation()}
+            >
+              <button 
+                onClick={() => setIsPrivacyOpen(false)}
+                className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10"
+              >
+                <X className="w-6 h-6 text-white" />
+              </button>
+
+              <h2 className="text-3xl font-black text-white mb-6">Privacy Policy</h2>
+              
+              <div className="flex-1 overflow-y-auto text-slate-300 space-y-4 pr-2 text-sm leading-relaxed">
+                <p>Welcome to Arrow Flow! Your privacy is important to us.</p>
+                <h3 className="text-lg font-bold text-white mt-4">1. Information Collection</h3>
+                <p>If you use Google Sync, we collect your unique user ID and basic profile info to save your progress. We do not sell your personal data.</p>
+                <h3 className="text-lg font-bold text-white mt-4">2. Game Data</h3>
+                <p>We store game progress, level attempts, and item usage to improve the player experience and provide cloud-save features.</p>
+                <h3 className="text-lg font-bold text-white mt-4">3. Third-Party Services</h3>
+                <p>Our game uses Firebase for analytics and cloud storage. Please check Firebase's privacy policy for details.</p>
+                <p className="pt-4 text-xs text-slate-500">Last updated: May 2024</p>
+              </div>
+
+              <button 
+                onClick={() => setIsPrivacyOpen(false)}
+                className="mt-8 w-full bg-[#65A9F7] text-white font-black h-[64px] rounded-2xl shadow-[0_4px_0_0_#2D6DAD] active:translate-y-1 active:shadow-none transition-all"
+              >
+                CLOSE
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1341,7 +1472,7 @@ function Board({ gameState, onLineClick, failedLines, bouncingLine, isIntro, exi
                 x2={(headPoint.x + vec.x * gameState.gridSize) * cellSize + cellSize/2}
                 y2={(headPoint.y + vec.y * gameState.gridSize) * cellSize + cellSize/2}
                 stroke="#2A2E4D"
-                strokeWidth={2}
+                strokeWidth={8}
                 className="pointer-events-none"
               />
             );
@@ -1362,6 +1493,7 @@ function Board({ gameState, onLineClick, failedLines, bouncingLine, isIntro, exi
           bounceDuration={bouncingLine.id === line.id ? (bouncingLine.duration || exitDuration) : 0}
           isHinted={gameState.activeItems.hint === line.id}
           guideLines={gameState.activeItems.guideLines}
+          isEraserMode={gameState.activeItems.removeMode}
           gridSize={gameState.gridSize}
           isIntro={isIntro}
           exitDuration={exitDuration}
@@ -1374,7 +1506,7 @@ function Board({ gameState, onLineClick, failedLines, bouncingLine, isIntro, exi
   );
 }
 
-function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistance, bounceDuration, isHinted, guideLines, gridSize, isIntro, exitDuration, exitDistance }: { 
+function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistance, bounceDuration, isHinted, isEraserMode, guideLines, gridSize, isIntro, exitDuration, exitDistance }: { 
   line: LineSegment, 
   cellSize: number, 
   isFailed: boolean,
@@ -1383,6 +1515,7 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
   bounceDistance: number,
   bounceDuration: number,
   isHinted: boolean,
+  isEraserMode?: boolean,
   guideLines: boolean,
   gridSize: number,
   isIntro: boolean,
@@ -1420,7 +1553,7 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
       y: headPoint.y + vec.y * bounceOffsetCells
   };
 
-  const exitingPoint = line.isExiting ? line.points[line.points.length - 1] : null;
+  const exitingPoint = (line.isExiting && !line.isFlying) ? line.points[line.points.length - 1] : null;
   const pathPoints = [...actualPoints];
   if (exitingPoint) pathPoints.push(exitingPoint);
   else if (isBouncing) pathPoints.push(extHeadPoint);
@@ -1440,18 +1573,29 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
   return (
     <motion.g
       className="cursor-pointer group pointer-events-auto"
+      animate={line.isFlying ? {
+        x: vec.x * cellSize * exitDistance,
+        y: vec.y * cellSize * exitDistance,
+        opacity: [1, 1, 0]
+      } : {}}
+      transition={line.isFlying ? {
+        duration: exitDuration,
+        ease: "easeIn"
+      } : {}}
     >
       {/* Main Line Body */}
       <motion.path
         d={d}
-        stroke={isFailed ? '#ff003c' : isHinted ? '#d3ddf2' : (line.color || '#cbd5e1')}
+        stroke={isFailed ? '#EEF9FF' : (line.color || '#cbd5e1')}
         strokeWidth={8}
         strokeLinecap="round" // RESTORE ROUND CAP
         strokeLinejoin="round"
         fill="none"
         strokeDasharray={dashArray}
         initial={{ strokeDashoffset: bodyLengthPx }} // Starts hidden (dash pushed back to tail)
-        animate={line.isExiting ? { 
+        animate={line.isFlying ? {
+            strokeDashoffset: 0
+        } : line.isExiting ? { 
             strokeDashoffset: -extLengthPx // Tail perfectly slithers to the old head position!
         } : isBouncing ? {
             strokeDashoffset: [0, -bounceExtPx, 0]
@@ -1478,7 +1622,12 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
             x: headPoint.x * cellSize + cellSize/2, 
             y: headPoint.y * cellSize + cellSize/2 
         }}
-        animate={line.isExiting ? { 
+        animate={line.isFlying ? {
+            x: headPoint.x * cellSize + cellSize/2, 
+            y: headPoint.y * cellSize + cellSize/2,
+            scale: 1,
+            opacity: 1
+        } : line.isExiting ? { 
             x: headPoint.x * cellSize + cellSize/2 + vec.x * cellSize * exitDistance, 
             y: headPoint.y * cellSize + cellSize/2 + vec.y * cellSize * exitDistance,
             scale: 1
@@ -1497,7 +1646,7 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
         } : { 
             x: headPoint.x * cellSize + cellSize/2, 
             y: headPoint.y * cellSize + cellSize/2,
-            scale: isHinted ? [1, 1.2, 1] : 1
+            scale: 1
         }}
         transition={line.isExiting ? { 
             duration: exitDuration, ease: "easeInOut" 
@@ -1508,7 +1657,7 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
             y: { duration: isIntro ? 2.2 : 0.3, ease: "easeInOut" },
             scale: { 
                 duration: isIntro ? 2.2 : 0.3, 
-                type: isHinted ? "tween" : "spring", 
+                type: "spring", 
                 bounce: 0.5, 
                 delay: isIntro ? 0 : lineDelay + 0.15 
             }
@@ -1518,8 +1667,8 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
         <g transform={`rotate(${calculatedAngle})`}>
           <path
             d="M -8 3 L 0 -8 L 8 3 Z"
-            fill={isFailed ? '#ff003c' : isHinted ? '#d3ddf2' : (line.color || '#cbd5e1')}
-            stroke={isFailed ? '#ff003c' : isHinted ? '#d3ddf2' : (line.color || '#cbd5e1')}
+            fill={isFailed ? '#EEF9FF' : (line.color || '#cbd5e1')}
+            stroke={isFailed ? '#EEF9FF' : (line.color || '#cbd5e1')}
             strokeWidth={5.5}
             strokeLinejoin="round"
             className="transition-colors duration-300"
@@ -1539,16 +1688,29 @@ function Line({ line, cellSize, isFailed, isBouncing, bounceCount, bounceDistanc
         />
       )}
 
-      {/* Glow effect for hint */}
+      {/* Glow effect and Reference line for hint */}
       {isHinted && !line.isExiting && (
-        <motion.circle 
-            cx={headPoint.x * cellSize + cellSize/2}
-            cy={headPoint.y * cellSize + cellSize/2}
-            animate={{ r: [cellSize*0.4, cellSize*0.7, cellSize*0.4], opacity: [0.2, 0.5, 0.2] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-            fill="#d3ddf2"
+        <>
+          <line 
+            x1={headPoint.x * cellSize + cellSize/2}
+            y1={headPoint.y * cellSize + cellSize/2}
+            x2={(headPoint.x + vec.x * gridSize) * cellSize + cellSize/2}
+            y2={(headPoint.y + vec.y * gridSize) * cellSize + cellSize/2}
+            stroke={line.color || '#cbd5e1'}
+            strokeWidth={8}
+            opacity={0.5}
+            strokeLinecap="round"
             className="pointer-events-none"
-        />
+          />
+          <motion.circle 
+              cx={headPoint.x * cellSize + cellSize/2}
+              cy={headPoint.y * cellSize + cellSize/2}
+              animate={{ r: [cellSize*0.4, cellSize*0.8, cellSize*0.4], opacity: [0.4, 0.9, 0.4] }}
+              transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+              fill={line.color || '#cbd5e1'}
+              className="pointer-events-none"
+          />
+        </>
       )}
     </motion.g>
   );

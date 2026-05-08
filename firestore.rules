@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'level', 'items', 'settings', 'updatedAt']) 
+        && data.keys().size() == 5
+        && data.uid == request.auth.uid
+        && data.level is int
+        && data.items is map
+        && data.items.keys().hasAll(['hint', 'eraser', 'guide'])
+        && data.items.keys().size() == 3
+        && data.items.hint is int
+        && data.items.eraser is int
+        && data.items.guide is int
+        && data.settings is map
+        && data.settings.keys().hasAll(['music', 'sound', 'vibration'])
+        && data.settings.keys().size() == 3
+        && data.settings.music is bool
+        && data.settings.sound is bool
+        && data.settings.vibration is bool
+        && data.updatedAt == request.time;
+    }
+
+    function isValidLevelLog(data) {
+       return data.keys().hasAll(['userId', 'level', 'action', 'timestamp'])
+        && (data.keys().hasAll(['heartsRemaining']) ? data.keys().size() == 5 : data.keys().size() == 4)
+        && data.userId == request.auth.uid
+        && data.level is int
+        && data.action in ['start', 'win', 'fail', 'restart']
+        && data.timestamp == request.time;
+    }
+
+    function isValidItemUsageLog(data) {
+       return data.keys().hasAll(['userId', 'level', 'itemType', 'timestamp'])
+        && data.keys().size() == 4
+        && data.userId == request.auth.uid
+        && data.level is int
+        && data.itemType in ['hint', 'eraser', 'guide']
+        && data.timestamp == request.time;
+    }
+
+    // --- Collections ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+      
+      match /level_logs/{logId} {
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(logId) && isValidLevelLog(request.resource.data);
+      }
+
+      match /item_usage_logs/{logId} {
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(logId) && isValidItemUsageLog(request.resource.data);
+      }
+    }
+  }
+}

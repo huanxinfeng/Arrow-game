@@ -7,6 +7,7 @@ export interface LineSegment {
   points: Point[]; // Set of points the line occupies
   direction: Direction;
   isExiting?: boolean;
+  isFlying?: boolean;
   exitTarget?: Point; // Where it flies to
   color?: string; // Random color assigned per line
 }
